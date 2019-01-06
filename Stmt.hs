@@ -40,7 +40,7 @@ stmtReachesBreak stmt = case stmt of
 
 ----
 -- Termination measure for `Stmt`.
--- Post: Rank is a positive integer (> 1).
+-- Post: Rank is a positive integer (> 0).
 --
 {-@ measure stmtRank @-}
 {-@ stmtRank :: Stmt -> {i:Int | i > 0} @-}
