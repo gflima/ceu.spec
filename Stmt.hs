@@ -191,7 +191,7 @@ thm_step1DecreasesRank x y = case x of
          *** QED
 
     | otherwise
-      -> impossible             -- p and (step1 p) must agree on `reak`
+      -> impossible             -- p and (step1 p) must agree on `Break`
          *** QED                --   reachability
 
   -- Nop/Break
