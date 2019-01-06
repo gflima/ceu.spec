@@ -10,7 +10,6 @@ module Expr where
 import Data.Maybe
 import Data.Set
 import Data.Tuple
-import Stmt (unreachable)
 
 type ID = String
 type Val = Int
@@ -21,6 +20,10 @@ data Expr
   | Const Val
   | Add Expr Expr
   deriving (Eq, Show)
+
+{-@ measure notReached :: {s:String | False} -> a @-}
+notReached :: String -> a
+notReached msg = error msg
 
 -- FIXME: For some reason the standard lib versions do not work:
 
@@ -79,7 +82,7 @@ memDefSet ((x,y):xs)
  -> {m':Mem | MemDef m' v}
 @-}
 memWrite :: Mem -> ID -> Val -> Mem
-memWrite [] var val = unreachable ("memWrite: undeclared variable: " ++ var)
+memWrite [] var val = notReached ("memWrite: undeclared variable: " ++ var)
 memWrite ((x,y):xs) var val
   | x == var  = (x, Just val):xs
   | otherwise = (x,y):(memWrite xs var val)
@@ -95,10 +98,10 @@ memWrite ((x,y):xs) var val
  -> Val
 @-}
 memRead :: Mem -> ID -> Val
-memRead [] var = unreachable ("memRead: undeclared variable: " ++ var)
+memRead [] var = notReached ("memRead: undeclared variable: " ++ var)
 memRead ((x,y):xs) var
   | x == var = if (isJustS y) then (fromJust y)
-               else unreachable ("memRead: undefined variable: " ++ var)
+               else notReached ("memRead: undefined variable: " ++ var)
   | otherwise = memRead xs var
 
 ----
