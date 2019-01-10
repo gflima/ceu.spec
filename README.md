@@ -1,5 +1,3 @@
-# Ceu.spec
-
 To check the sources with LiquidHaskell:
 ```
 $ liquid Ceu/MODULE.hs
