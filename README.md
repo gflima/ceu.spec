@@ -1,6 +1,11 @@
-Ceu.spec = (Basic) Ceu.hs + LiquidHaskell
+# Ceu.spec
 
-Refs:
+To check the sources with LiquidHaskell:
+```
+$ liquid Ceu/MODULE.hs
+```
+
+References:
 * https://liquid.kosmikus.org/
 * http://goto.ucsd.edu/~pmr/papers/rondon-liquid-types.pdf
 * http://goto.ucsd.edu/~rjhala/papers/real_world_liquid.pdf
