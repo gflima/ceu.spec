@@ -15,6 +15,7 @@ data Stmt [rank]
   | If {if1 :: Bool, if2 :: Stmt, if3 :: Stmt}
   | Seq {seq1 :: Stmt, seq2 :: Stmt}
   | Loop {loop1 :: Stmt, loop2 :: {p:Stmt | not (mayExhaust p)}}
+  | ParOr {parOr1 :: Stmt, parOr2 :: Stmt}
 @-}
 data Stmt
   = Nop
@@ -23,6 +24,7 @@ data Stmt
   | If Bool Stmt Stmt
   | Seq Stmt Stmt
   | Loop Stmt Stmt
+  | ParOr Stmt Stmt
   deriving (Eq, Show)
 
 -- A statement x _may exhaust_ if it may run to completion without ever
@@ -31,23 +33,25 @@ data Stmt
 -- e.g., (Loop Nop Await) will never exhaust.
 {-@ measure mayExhaust @-}
 mayExhaust x = case x of
-  Nop      -> True
-  Break    -> False
-  Await    -> False
-  If _ p q -> mayExhaust p || mayExhaust q
-  Seq p q  -> mayExhaust p && mayExhaust q
-  Loop _ _ -> True
+  Nop       -> True
+  Break     -> False
+  Await     -> False
+  If _ p q  -> mayExhaust p || mayExhaust q
+  Seq p q   -> mayExhaust p && mayExhaust q
+  Loop _ _  -> True
+  ParOr p q -> mayExhaust p || mayExhaust q
 
 -- A statement x _is blocked_ if the first instruction in each execution
 -- path in x is an Await.
 {-@ measure isBlocked @-}
 isBlocked x = case x of
-  Nop      -> False
-  Break    -> False
-  Await    -> True
-  If _ _ _ -> False
-  Seq p _  -> isBlocked p
-  Loop p _ -> isBlocked p
+  Nop       -> False
+  Break     -> False
+  Await     -> True
+  If _ _ _  -> False
+  Seq p _   -> isBlocked p
+  Loop p _  -> isBlocked p
+  ParOr p q -> isBlocked p && isBlocked q
 
 {-@ predicate StmtIsIrreducible P
   = P == Nop || P == Break || isBlocked P @-}
@@ -58,12 +62,13 @@ isBlocked x = case x of
 {-@ rank :: Stmt -> {i:Int | i > 0} @-}
 rank :: Stmt -> Int
 rank x = case x of
-  Nop      -> 1
-  Break    -> 1
-  Await    -> 1
-  If _ p q -> 1 + LH.max (rank p) (rank q)
-  Seq p q  -> 1 + rank p + if p == Break then 0 else rank q
-  Loop p q -> 1 + rank p + if not (mayExhaust p) then 0 else rank q
+  Nop       -> 1
+  Break     -> 1
+  Await     -> 1
+  If _ p q  -> 1 + LH.max (rank p) (rank q)
+  Seq p q   -> 1 + rank p + if p == Break then 0 else rank q
+  Loop p q  -> 1 + rank p + if not (mayExhaust p) then 0 else rank q
+  ParOr p q -> 1 + rank p + rank q
 
 {-@ reflect step1 @-}
 {-@ step1
@@ -73,15 +78,28 @@ rank x = case x of
 step1 :: Stmt -> Stmt
 step1 x = case x of
  If b p q
-   | b         -> p
-   | otherwise -> q
- Seq Nop q     -> q
- Seq Break _   -> Break
- Seq p q       -> Seq (step1 p) q
- Loop Nop q    -> Loop q q
- Loop Break _  -> Nop
- Loop p q      -> Loop (step1 p) q
- x             -> x              -- impossible
+   | b                -> p
+   | otherwise        -> q
+
+ Seq p q
+  | p == Nop          -> q
+  | p == Break        -> Break
+  | otherwise         -> Seq (step1 p) q
+
+ Loop p q
+  | p == Nop          -> Loop q q
+  | p == Break        -> Nop
+  | otherwise         -> Loop (step1 p) q
+
+ ParOr p q
+  | p == Nop          -> Nop
+  | p == Break        -> Break
+  | q == Nop          -> Nop
+  | q == Break        -> Break
+  | not (isBlocked p) -> ParOr (step1 p) q
+  | not (isBlocked q) -> ParOr p (step1 q)
+  | otherwise         -> x      -- impossible
+ x                    -> x      -- impossible
 
 {-@ step
  :: x:StmtNotIrreducible
@@ -93,6 +111,7 @@ step x = let y = step1 x in y ? lem_step1DecreasesRank x y
  :: StmtNotIrreducible
  -> StmtIrreducible
 @-}
+-- TODO: Check that (isBlocked p) is impossible.
 run :: Stmt -> Stmt
 run Nop   = liquidError "impossible"
 run Break = liquidError "impossible"
@@ -180,6 +199,55 @@ lem_step1DecreasesRank x y = case x of
          =<= 1 + rank (step1 p) + rank q ? lem_step1DecreasesRank p (step1 p)
          =<= rank x
          *** QED
+
+  ParOr p q
+    | p == Nop
+      -> rank y
+         === rank (step1 x)
+         === rank Nop
+         =<= rank x
+         *** QED
+
+    | p == Break
+      -> rank y
+         === rank (step1 x)
+         === rank Break
+         =<= rank x
+         *** QED
+
+    | q == Nop
+      -> rank y
+         === rank (step1 x)
+         === rank Nop
+         =<= rank x
+         *** QED
+
+    | q == Break
+      -> rank y
+         === rank (step1 x)
+         === rank Break
+         =<= rank x
+         *** QED
+
+    | not (isBlocked p)
+      -> rank y
+         === rank (step1 x)
+         === rank (ParOr (step1 p) q) ? lem_step1DecreasesRank p (step1 p)
+         =<= rank x
+         *** QED
+
+    | not (isBlocked q)
+      -> rank y
+         === rank (step1 x)
+         === rank (ParOr p (step1 q)) ? lem_step1DecreasesRank q (step1 q)
+         =<= rank x
+         *** QED
+
+    | otherwise
+      -> impossible
+         *** QED
+
+  _ -> impossible *** QED
 
 -- TESTS -------------------------------------------------------------------
 
