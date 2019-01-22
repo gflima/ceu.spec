@@ -1,63 +1,105 @@
--- Required for reflection.
 {-@ LIQUID "--reflection" @-}
 
 module Ceu.Stmt where
-import Ceu.LH as LH
 
--- Refined type for Stmt.
+import Ceu.LH as LH
+import Debug.Trace
+
+-- Statement:
 -- . Function rank is the default termination measure.
--- . Loop body must always reach a Break or Await.
+-- . Fin body must not contain Loop, Break, Await, or Fin.
+-- . Loop body must always reach a Break, Await, or Fin.
 {-@
 data Stmt [rank]
   = Nop
   | Break
   | Await
+  | Fin {fin1 :: {p:Stmt | isWellFormedFinBody p}}
   | If {if1 :: Bool, if2 :: Stmt, if3 :: Stmt}
   | Seq {seq1 :: Stmt, seq2 :: Stmt}
-  | Loop {loop1 :: Stmt, loop2 :: {p:Stmt | not (mayExhaust p)}}
+  | Loop {loop1 :: Stmt, loop2 :: {p:Stmt | isWellFormedLoopBody p}}
   | ParOr {parOr1 :: Stmt, parOr2 :: Stmt}
 @-}
 data Stmt
   = Nop
   | Break
   | Await
+  | Fin Stmt
   | If Bool Stmt Stmt
   | Seq Stmt Stmt
   | Loop Stmt Stmt
   | ParOr Stmt Stmt
   deriving (Eq, Show)
 
--- A statement x _may exhaust_ if it may run to completion without ever
--- executing a Break or Await.  Here we do a crude analysis.  We assume that
--- any Loop may exhaust, although in practice this is not always the case,
+-- Tests whether x _IS A WELL-FORMED FIN BODY_, i.e., if x does not contain
+-- a Loop, Break, Await, or Fin.
+{-@ measure isWellFormedFinBody @-}
+isWellFormedFinBody x = case x of
+  Nop       -> True
+  Break     -> False
+  Await     -> False
+  Fin _     -> False
+  If _ p q  -> isWellFormedFinBody p && isWellFormedFinBody q
+  Seq p q   -> isWellFormedFinBody p && isWellFormedFinBody q
+  Loop _ _  -> False
+  ParOr p q -> isWellFormedFinBody p && isWellFormedFinBody q
+
+-- Tests whether x _IS A WELL-FORMED LOOP BODY_, i.e., if every execution
+-- path in x reaches a Break, Await, or Fin.
+{-@ inline isWellFormedLoopBody @-}
+isWellFormedLoopBody x = not (mayExhaust x)
+
+-- Tests whether x _MAY EXHAUST_, i.e., if x may run to completion without
+-- ever executing a Break, Await, or Fin.  Here we do a crude analysis.  We
+-- assume that any Loop may exhaust although this is not always the case,
 -- e.g., (Loop Nop Await) will never exhaust.
 {-@ measure mayExhaust @-}
 mayExhaust x = case x of
   Nop       -> True
   Break     -> False
   Await     -> False
+  Fin _     -> False
   If _ p q  -> mayExhaust p || mayExhaust q
   Seq p q   -> mayExhaust p && mayExhaust q
   Loop _ _  -> True
   ParOr p q -> mayExhaust p || mayExhaust q
 
--- A statement x _is blocked_ if the first instruction in each execution
--- path in x is an Await.
+-- Tests whether x _IS BLOCKED_, i.e., if the first instruction in each of
+-- its trails is an Await or Fin.
 {-@ measure isBlocked @-}
 isBlocked x = case x of
   Nop       -> False
   Break     -> False
   Await     -> True
+  Fin _     -> True
   If _ _ _  -> False
   Seq p _   -> isBlocked p
   Loop p _  -> isBlocked p
   ParOr p q -> isBlocked p && isBlocked q
 
-{-@ predicate StmtIsIrreducible P
-  = P == Nop || P == Break || isBlocked P @-}
+-- Tests whether x _IS IRREDUCIBLE_, i.e., cannot be reduced by step
+-- function.
+{-@ inline isIrreducible @-}
+isIrreducible x = x == Nop || x == Break || isBlocked x
+
+{-@ predicate StmtIsIrreducible P = isIrreducible P @-}
 {-@ type StmtIrreducible = {p:Stmt | StmtIsIrreducible p} @-}
 {-@ type StmtNotIrreducible = {p:Stmt | not (StmtIsIrreducible p)} @-}
 
+-- Extracts the bodies of all active Fin statements in x.
+{-@ reflect clear @-}
+{-@ clear :: x:Stmt -> y:{Stmt | rank x >= rank y} @-}
+clear x = case x of
+  Nop       -> Nop
+  Break     -> Nop
+  Await     -> Nop
+  Fin p     -> p
+  If _ p q  -> Nop
+  Seq p _   -> clear p
+  Loop p _  -> clear p
+  ParOr p q -> Seq (clear p) (clear q)
+
+-- Termination measure for Stmt.
 {-@ measure rank @-}
 {-@ rank :: Stmt -> {i:Int | i > 0} @-}
 rank :: Stmt -> Int
@@ -65,10 +107,11 @@ rank x = case x of
   Nop       -> 1
   Break     -> 1
   Await     -> 1
+  Fin p     -> 1 + (rank p)
   If _ p q  -> 1 + LH.max (rank p) (rank q)
   Seq p q   -> 1 + rank p + if p == Break then 0 else rank q
   Loop p q  -> 1 + rank p + if not (mayExhaust p) then 0 else rank q
-  ParOr p q -> 1 + rank p + rank q
+  ParOr p q -> 2 + rank p + rank q
 
 {-@ reflect step1 @-}
 {-@ step1
@@ -92,11 +135,11 @@ step1 x = case x of
   | otherwise         -> Loop (step1 p) q
 
  ParOr p q
-  | p == Nop          -> Nop
-  | p == Break        -> Break
-  | q == Nop          -> Nop
-  | q == Break        -> Break
+  | p == Nop          -> Seq (clear q) Nop
+  | p == Break        -> Seq (clear q) Break
   | not (isBlocked p) -> ParOr (step1 p) q
+  | q == Nop          -> Seq (clear p) Nop
+  | q == Break        -> Seq (clear p) Break
   | not (isBlocked q) -> ParOr p (step1 q)
   | otherwise         -> x      -- impossible
  x                    -> x      -- impossible
@@ -111,13 +154,13 @@ step x = let y = step1 x in y ? lem_step1DecreasesRank x y
  :: StmtNotIrreducible
  -> StmtIrreducible
 @-}
--- TODO: Check that (isBlocked p) is impossible.
 run :: Stmt -> Stmt
-run Nop   = liquidError "impossible"
-run Break = liquidError "impossible"
-run p     = if p' == Nop || p' == Break || isBlocked p' then p'
-            else run p'
-  where p' = step p
+run x
+  | isIrreducible x = liquidError "impossible"
+  | otherwise = let x' = step x
+                    s  = show x  ++ " <" ++ show (rank x)  ++ ">"
+                    s' = show x' ++ " <" ++ show (rank x') ++ ">"
+    in trace (s ++ " -> " ++ s') $ if isIrreducible x' then x' else run x'
 
 -- LEMMAS ------------------------------------------------------------------
 
@@ -204,28 +247,14 @@ lem_step1DecreasesRank x y = case x of
     | p == Nop
       -> rank y
          === rank (step1 x)
-         === rank Nop
+         === rank (Seq (clear q) Nop)
          =<= rank x
          *** QED
 
     | p == Break
       -> rank y
          === rank (step1 x)
-         === rank Break
-         =<= rank x
-         *** QED
-
-    | q == Nop
-      -> rank y
-         === rank (step1 x)
-         === rank Nop
-         =<= rank x
-         *** QED
-
-    | q == Break
-      -> rank y
-         === rank (step1 x)
-         === rank Break
+         === rank (Seq (clear q) Break)
          =<= rank x
          *** QED
 
@@ -233,6 +262,20 @@ lem_step1DecreasesRank x y = case x of
       -> rank y
          === rank (step1 x)
          === rank (ParOr (step1 p) q) ? lem_step1DecreasesRank p (step1 p)
+         =<= rank x
+         *** QED
+
+    | q == Nop
+      -> rank y
+         === rank (step1 x)
+         === rank (Seq (clear p) Nop)
+         =<= rank x
+         *** QED
+
+    | q == Break
+      -> rank y
+         === rank (step1 x)
+         === rank (Seq (clear p) Break)
          =<= rank x
          *** QED
 
@@ -251,9 +294,20 @@ lem_step1DecreasesRank x y = case x of
 
 -- TESTS -------------------------------------------------------------------
 
--- fail1 = Loop Nop Nop
--- fail2 = Loop Break Nop
--- pass3 = Loop Nop Break
--- pass4 = Loop Nop Await
--- fail5 = Loop Nop (Loop Nop Await)
--- pass6 = Loop Nop (Seq (Loop Nop Await) Break)
+loop_pass1 = Loop Nop Break
+loop_pass2 = Loop Nop Await
+loop_pass3 = Loop Nop (Seq (Loop Nop Await) Break)
+
+-- Bad Loop's.
+-- loop_fail1 = Loop Nop Nop
+-- loop_fail2 = Loop Break Nop
+-- loop_fail3 = Loop Nop (Loop Nop Await) -- see loop_pass3
+
+fin_pass1 = Fin Nop
+fin_pass2 = Fin (If False Nop (Seq Nop Nop))
+fin_pass3 = Fin (ParOr (ParOr (ParOr Nop Nop) Nop) Nop)
+
+-- Bad Fin's.
+-- fin_fail1 = Fin Break
+-- fin_fail2 = Fin (Seq Nop Await)
+-- fin_fail3 = Fin (ParOr (ParOr (ParOr Nop (Loop Nop Break)) Nop) Nop)
