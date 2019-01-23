@@ -2,13 +2,14 @@
 
 module Ceu.Stmt where
 
+import Ceu.Expr as Expr
 import Ceu.LH as LH
 import Debug.Trace
 
--- Statement:
--- . Function rank is the default termination measure.
--- . Fin body must not contain Loop, Break, Await, or Fin.
--- . Loop body must always reach a Break, Await, or Fin.
+-- Statement.
+-- * Function 'rank' is the default termination measure.
+-- * 'Fin' body must not contain 'Loop', 'Break', 'Await', or 'Fin'.
+-- * 'Loop' body must always reach a 'Break', 'Await', or 'Fin'.
 {-@
 data Stmt [rank]
   = Nop
@@ -29,10 +30,11 @@ data Stmt
   | Seq Stmt Stmt
   | Loop Stmt Stmt
   | ParOr Stmt Stmt
+  | ParAnd Stmt Stmt
   deriving (Eq, Show)
 
--- Tests whether x _IS A WELL-FORMED FIN BODY_, i.e., if x does not contain
--- a Loop, Break, Await, or Fin.
+-- Tests whether 'x' is a well-formed fin body, i.e., if 'x' does not
+-- contain a Loop, Break, Await, or Fin.
 {-@ measure isWellFormedFinBody @-}
 isWellFormedFinBody x = case x of
   Nop       -> True
@@ -44,15 +46,15 @@ isWellFormedFinBody x = case x of
   Loop _ _  -> False
   ParOr p q -> isWellFormedFinBody p && isWellFormedFinBody q
 
--- Tests whether x _IS A WELL-FORMED LOOP BODY_, i.e., if every execution
--- path in x reaches a Break, Await, or Fin.
+-- Tests whether 'x' is a well-formed loop body, i.e., if every execution
+-- path in 'x' reaches a 'Break', 'Await', or 'Fin'.
 {-@ inline isWellFormedLoopBody @-}
 isWellFormedLoopBody x = not (mayExhaust x)
 
--- Tests whether x _MAY EXHAUST_, i.e., if x may run to completion without
--- ever executing a Break, Await, or Fin.  Here we do a crude analysis.  We
--- assume that any Loop may exhaust although this is not always the case,
--- e.g., (Loop Nop Await) will never exhaust.
+-- Tests whether 'x' may exhaust, i.e., if 'x' may run to completion without
+-- ever executing a 'Break', 'Await', or 'Fin'.  Here we do a crude
+-- analysis.  We assume that any Loop may exhaust although this is not
+-- always the case, e.g., @(Loop Nop Await)@ will never exhaust.
 {-@ measure mayExhaust @-}
 mayExhaust x = case x of
   Nop       -> True
@@ -64,8 +66,8 @@ mayExhaust x = case x of
   Loop _ _  -> True
   ParOr p q -> mayExhaust p || mayExhaust q
 
--- Tests whether x _IS BLOCKED_, i.e., if the first instruction in each of
--- its trails is an Await or Fin.
+-- Tests whether 'x' is blocked, i.e., if the first instruction in each of
+-- its trails is an 'Await' or 'Fin'.
 {-@ measure isBlocked @-}
 isBlocked x = case x of
   Nop       -> False
@@ -77,8 +79,8 @@ isBlocked x = case x of
   Loop p _  -> isBlocked p
   ParOr p q -> isBlocked p && isBlocked q
 
--- Tests whether x _IS IRREDUCIBLE_, i.e., cannot be reduced by step
--- function.
+-- Tests whether 'x' is irreducible, i.e., if it cannot be advanced by the
+-- 'step' function.
 {-@ inline isIrreducible @-}
 isIrreducible x = x == Nop || x == Break || isBlocked x
 
@@ -86,7 +88,7 @@ isIrreducible x = x == Nop || x == Break || isBlocked x
 {-@ type StmtIrreducible = {p:Stmt | StmtIsIrreducible p} @-}
 {-@ type StmtNotIrreducible = {p:Stmt | not (StmtIsIrreducible p)} @-}
 
--- Extracts the bodies of all active Fin statements in x.
+-- Extracts the bodies of all active 'Fin' statements in 'x'.
 {-@ reflect clear @-}
 {-@ clear :: x:Stmt -> y:{Stmt | rank x >= rank y} @-}
 clear x = case x of
@@ -99,7 +101,7 @@ clear x = case x of
   Loop p _  -> clear p
   ParOr p q -> Seq (clear p) (clear q)
 
--- Termination measure for Stmt.
+-- Termination measure for 'Stmt'.
 {-@ measure rank @-}
 {-@ rank :: Stmt -> {i:Int | i > 0} @-}
 rank :: Stmt -> Int

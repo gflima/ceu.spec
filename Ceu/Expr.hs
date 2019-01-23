@@ -2,9 +2,11 @@
 {-@ LIQUID "--reflection" @-}
 
 module Ceu.Expr () where
+
 import Ceu.LH as LH
 import Data.Maybe
-import Data.List
+import Data.Set hiding (size)
+import Prelude hiding (read)
 
 type Id = String
 type Val = Int
@@ -16,136 +18,96 @@ type Mem = [(Id, Maybe Val)]
 data Expr
   = Const Int
   | Read Id
-  | Umn Expr
   | Add Expr Expr
-  | Sub Expr Expr
-  | Mul Expr Expr
-  | Div Expr Expr
   deriving (Eq, Show)
 
-{-@ measure memSize @-}
-{-@ memSize :: Mem -> Nat @-}
-memSize :: Mem -> Int
-memSize m = case m of
+-- Gets the size of memory 'm'.
+{-@ measure size @-}
+{-@ size :: Mem -> Nat @-}
+size :: Mem -> Int
+size m = case m of
   []   -> 0
-  _:xs -> 1 + memSize xs
+  _:xs -> 1 + size xs
 
+-- The empty memory.
 {-@ reflect memEmpty @-}
+memEmpty :: Mem
 memEmpty = []
 
-{-@ type MemEmpty = {m:Mem | memSize m == 0} @-}
-{-@ type MemNonEmpty = {m:Mem | memSize m > 0} @-}
+{-@ type MemEmpty = {m:Mem | size m == 0} @-}
+{-@ type MemNonEmpty = {m:Mem | size m > 0} @-}
 
-{-@ reflect memGetDecl @-}
-memGetDecl :: Mem -> Id -> Mem
-memGetDecl m id = case m of
-  []                   -> []
-  (x,y):xs | x == id   -> m
-           | otherwise -> memGetDecl xs id
+-- Gets the set of variables declared in memory 'm'.
+{-@ measure declSet @-}
+declSet :: Mem -> Set Id
+declSet m = case m of
+  []         -> empty
+  ((x,_):xs) -> union (singleton x) (declSet xs)
 
-{-@ reflect memIsDecl @-}
-memIsDecl m id = memGetDecl m id /= memEmpty
+-- Gets the set of variables defined in memory 'm'.
+-- (Only the left-most occurrence of each variable is considered.)
+{-@ measure defnSet @-}
+defnSet :: Mem -> Set Id
+defnSet m = case m of
+  []                       -> empty
+  ((x,y):xs) | LH.isJust y -> union (singleton x) (defnSet xs)
+             | otherwise   -> difference (defnSet xs) (singleton x)
 
--- {-@ reflect memIsDefn @-}
--- memIsDefn :: Mem -> Id -> Bool
--- memIsDefn m id = case m of
---   []                   -> False
---   (x,y):xs | x == id   -> LH.isJust y
---            | otherwise -> memIsDefn xs id
+{-@ predicate MemDecl M V = member V (declSet M) @-}
+{-@ predicate MemDefn M V = member V (defnSet M) @-}
 
--- {-@ memWrite
---  :: m:MemNonEmpty
---  -> id:{Id | memIsDecl m id}
---  -> Val
---  -> MemNonEmpty
--- @-}
--- memWrite :: Mem -> Id -> Val -> Mem
--- memWrite m id val = case m of
---   [] -> liquidError "impossible"
---   (x,y):xs | x == id   -> (x,Just val):xs
---            | otherwise -> (x,y):(memWrite xs id val)
+-- Reads value of variable 'id' in memory 'm'.
+-- * Pre: Variable 'id' is defined in memory 'm'.
+-- * Post: Returns a 'Just' with a value.
+{-@ reflect read' @-}
+{-@ read'
+ :: m:Mem
+ -> id:{Id | MemDefn m id}
+ -> val:{Maybe Val | isJust val}
+@-}
+read' :: Mem -> Id -> Maybe Val
+read' m id = case m of
+  []                         -> Nothing -- impossible
+  (x,Nothing):xs | x == id   -> Nothing -- impossible
+                 | otherwise -> read' xs id
+  (x,Just y):xs  | x == id   -> Just y
+                 | otherwise -> read' xs id
+
+-- Writes value 'val' to variable 'id' in memory 'm'.
+-- * Pre: Variable 'id' is declared in memory 'm'.
+-- * Post: Variable 'id' is defined in the returned memory.
+{-@ write'
+ :: m:Mem
+ -> {id:Id | MemDecl m id || MemDefn m id}
+ -> Val
+ -> {m':Mem | MemDefn m' id && size m > 0}
+@-}
+write' :: Mem -> Id -> Val -> Mem
+write' m id val = case m of
+  []                   -> [] -- impossible
+  (x,y):xs | x == id   -> (x, Just val):xs
+           | otherwise -> (x,y):(write' xs id val)
+
+-- Safe read.
+{-@ read
+ :: m:Mem
+ -> id:{Id | MemDefn m id}
+ -> Val
+@-}
+read m id
+  | val == Nothing = liquidError "impossible"
+  | otherwise      = fromJust val
+  where val = read' m id
+
+-- Safe write.
+{-@ write
+ :: m:Mem
+ -> id:{Id | MemDecl m id || MemDefn m id}
+ -> Val
+ -> {m':Mem | MemDefn m' id}
+@-}
+write :: Mem -> Id -> Val -> Mem
+write m id val = write' m id val
+
 
 -- LEMMAS ------------------------------------------------------------------
-
-{-@ lem_memIsDecl1
- :: m:MemEmpty
- -> id:Id
- -> {not (memIsDecl m id)}
-@-}
-lem_memIsDecl1 :: Mem -> Id -> Proof
-lem_memIsDecl1 m id = case m of
-  [] -> memIsDecl m id
-        === memIsDecl memEmpty id
-        === memGetDecl memEmpty id /= []
-        === False
-        *** QED
-  _  -> impossible *** QED
-
-
--- {-@ lem_memIsDecl2
---  :: m:Mem
---  -> id:{Id | memIsDecl m id}
---  -> {id == fst (head m) || memSize (memGetDecl m id) > 1}
--- @-}
--- lem_memIsDecl2 :: Mem -> Id -> Proof
--- lem_memIsDecl2 m id = case m of
---   []
---     -> impossible ? lem_memIsDecl1 m id
---        *** QED
-
---   (x,y):xs
---     | id == x
---       -> memSize (memGetDecl m id)
---          === memSize m
---          =>= 0
---          *** QED
-
---     | otherwise
---       -> memSize (memGetDecl m id)
---          === memSize (memGetDecl xs id) ? lem_memIsDecl2 xs id
---          =>= 0
---          *** QED
-
--- {-@ lem_memIsDecl
---  :: m:MemNonEmpty
---  -> id:{Id | memIsDecl m id}
---  -> {id == fst (head m) || ((tail m) /= memEmpty && memIsDecl (tail m) id)}
--- @-}
--- lem_memIsDecl :: Mem -> Id -> Proof
--- lem_memIsDecl m id = case m of
---   []
---     -> impossible
---        *** QED
-
---   (x,y):xs
---     | x == id
---       -> trivial
---          *** QED
-
---     | otherwise
---       -> memIsDecl (tail m) id
---          === memIsDecl xs id
---          === memIsDecl ((x,y):xs) id
---          *** QED
-
--- {-@ lem_memIsDefn
---  :: m:MemNonEmpty
---  -> id:{Id | memIsDefn m id}
---  -> {m /= memEmpty && (fst (head m) == id || memIsDefn (tail m) id)}
--- @-}
--- lem_memIsDefn :: Mem -> Id -> Proof
--- lem_memIsDefn m id = case m of
---   []
---     -> impossible
---        *** QED
-
---   (x,y):xs
---     | x == id
---       -> trivial
---          *** QED
-
---     | otherwise
---       -> memIsDefn (tail m) id
---          === memIsDefn xs id
---          === memIsDefn ((x,y):xs) id
---          *** QED
