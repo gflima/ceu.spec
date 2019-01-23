@@ -3,226 +3,98 @@
 module Ceu.Mem () where
 
 import Ceu.LH as LH
+import Prelude hiding (read)
+import qualified Data.Set as S
 
 type Id = String
 type Val = Int
-type Bind = (Id,Maybe Val)
-type Mem = [Bind]
+type Mem = [(Id,Maybe Val)]
 
 {-@ type MemEmpty = {m:Mem | m == []} @-}
 {-@ type MemNonEmpty = {m:Mem | m /= []} @-}
 
-{-@ reflect isDeclared @-}
-isDeclared :: Mem -> Id -> Bool
-isDeclared m id = case m of
-  []                   -> False
-  (x,_):xs | x == id   -> True
-           | otherwise -> isDeclared xs id
+{-@ measure declSet @-}
+declSet :: Mem -> S.Set Id
+declSet m = case m of
+  []       -> S.empty
+  (x,_):xs -> S.union (S.singleton x) (declSet xs)
 
-{-@ reflect isDefined @-}
-isDefined :: Mem -> Id -> Bool
-isDefined m id = case m of
-  []                         -> False
-  (x,Nothing):xs | x == id   -> False
-                 | otherwise -> isDefined xs id
-  (x,Just _):xs  | x == id   -> True
-                 | otherwise -> isDefined xs id
+{-@ measure defnSet @-}
+defnSet :: Mem -> S.Set Id
+defnSet m = case m of
+  []                     -> S.empty
+  (x,y):xs | LH.isJust y -> S.union (S.singleton x) (defnSet xs)
+           | otherwise   -> S.difference (defnSet xs) (S.singleton x)
 
-{-@ reflect isDefinedWithValue @-}
-isDefinedWithValue :: Mem -> Id -> Val -> Bool
-isDefinedWithValue m id val = case m of
-  []                         -> False
-  (x,Nothing):xs | x == id   -> False
-                 | otherwise -> isDefined xs id
-  (x,Just y):xs  | x == id   -> y == val
-                 | otherwise -> isDefined xs id
+{-@ predicate DeclP M ID = member ID (declSet M) @-}
+{-@ predicate DefnP M ID = member ID (defnSet M) @-}
 
-{-@ reflect declare' @-}
-{-@ declare'
+{-@ decl
  :: m:Mem
  -> id:Id
- -> m':{Mem | len m' > len m && fst (head m') == id} @-}
-declare' :: Mem -> Id -> Mem
-declare' m id = (id,Nothing):m
-
-{-@ declare :: m:Mem -> id:Id -> m':{Mem | isDeclared m' id} @-}
-declare :: Mem -> Id -> Mem
-declare m id = m' ? lem_declare m id m'
-  where m' = declare' m id
-
-{-@ reflect write' @-}
-write' :: Mem -> Id -> Val -> Mem
-write' m id val = case m of
-  []                   -> []    -- impossible
-  (x,y):xs | x == id   -> (x,Just val):xs
-           | otherwise -> (x,y):(write' xs id val)
+ -> m':{Mem | S.isSubsetOf (declSet m) (declSet m') && DeclP m' id} @-}
+decl :: Mem -> Id -> Mem
+decl m id = (id,Nothing):m
 
 {-@ write
  :: m:Mem
- -> id:{Id | isDeclared m id}
- -> Val
- -> m':{Mem | isDeclared m' id && isDefined m' id}
+ -> id:{Id | DeclP m id}
+ -> val:Val
+ -> m':{Mem | declSet m == declSet m' &&
+              S.isSubsetOf (defnSet m) (defnSet m') &&
+              DefnP m' id}
 @-}
 write :: Mem -> Id -> Val -> Mem
-write m id val = m' ? lem_write m id val m'
-  where m' = write' m id val
+write m id val = case m of
+  []                   -> liquidError "impossible"
+  (x,y):xs | x == id   -> (x,Just val):xs
+           | otherwise -> (x,y):(write xs id val)
 
--- LEMMAS ------------------------------------------------------------------
-
-{-@ lem_isDeclared
- :: m:MemNonEmpty
- -> id:{Id | isDeclared m id}
- -> {isDeclared [head m] id || (tail m /= [] && isDeclared (tail m) id)}
-@-}
-lem_isDeclared :: Mem -> Id -> Proof
-lem_isDeclared m id = case m of
-  []
-    -> impossible
-       *** QED
-
-  (x,y):xs
-    | x == id
-      -> isDeclared m id
-         === isDeclared ((x,y):xs) id
-         === isDeclared ((x,y):[]) id
-         === isDeclared (head m:[]) id
-         *** QED
-
-    | xs == []
-      -> impossible
-         *** QED
-
-    | otherwise
-      -> isDeclared m id
-         === isDeclared xs id
-         *** QED
-
-{-@ lem_isDeclaredImpNonEmpty
+{-@ read
  :: m:Mem
- -> id:{Id | isDeclared m id}
- -> {m /= []}
+ -> id:{Id | DefnP m id}
+ -> Val
 @-}
-lem_isDeclaredImpNonEmpty :: Mem -> Id -> Proof
-lem_isDeclaredImpNonEmpty m id
-  = isDeclared m id
-    === m /= []
-    *** QED
-
-{-@ lem_isDefinedImpNonEmpty
- :: m:Mem
- -> id:{Id | isDefined m id}
- -> {m /= []}
-@-}
-lem_isDefinedImpNonEmpty :: Mem -> Id -> Proof
-lem_isDefinedImpNonEmpty m id
-  = isDefined m id
-    === m /= []
-    *** QED
-
-{-@ lem_isDefinedImpIsDeclared
- :: m:Mem
- -> id:{Id | isDefined m id}
- -> {isDeclared m id}
-@-}
-lem_isDefinedImpIsDeclared :: Mem -> Id -> Proof
-lem_isDefinedImpIsDeclared m id = case m of
-  []
-    -> impossible ? lem_isDefinedImpNonEmpty m id
-       *** QED
-
-  (x,y):xs
-    | x == id
-      -> isDefined m id
-         === isDeclared m id
-         *** QED
-
-    | otherwise
-      -> isDefined m id
-         === isDefined xs id ? lem_isDefinedImpIsDeclared xs id
-         === isDeclared xs id
-         === isDeclared ((x,y):xs) id
-         === isDeclared m id
-         *** QED
-
-{-@ lem_declare
- :: m:Mem
- -> id:Id
- -> m':{Mem | m' == declare' m id}
- -> {isDeclared m' id}
-@-}
-lem_declare :: Mem -> Id -> Mem -> Proof
-lem_declare m id m'
-  = isDeclared m' id
-    === isDeclared (declare' m id) id
-    === isDeclared ((id,Nothing):m) id
-    *** QED
-
--- {-@ lem_write
---  :: m:Mem
---  -> id:{Id | isDeclared m id}
---  -> val:Val
---  -> m':{Mem | m' == write' m id val}
---  -> {isDeclared m' id && len m' > 0}
--- @-}
--- lem_write :: Mem -> Id -> Val -> Mem -> Proof
--- lem_write m id val m' = case m of
---   []
---     -> impossible ? lem_isDeclaredImpNonEmpty m id
---        *** QED
-
---   (x,y):xs
---     | x == id
---       -> isDeclared ((x,Just val):xs) id
---          === isDeclared (write' m id val) id
---          === isDeclared m' id
---          *** QED
-
---     | otherwise
---       -> isDeclared m id
---          === isDeclared ((x,y):xs) id
---          === isDeclared xs id
---              ? lem_isDeclaredImpNonEmpty xs id
---              ? lem_write xs id val (write' xs id val)
---          === isDeclared (write' xs id val) id
---          === isDeclared ((x,y):(write' xs id val)) id
---          === isDeclared (write' ((x,y):xs) id val) id
---          === isDeclared m' id
---          *** QED
-
-{-@ lem_write
- :: m:Mem
- -> id:{Id | isDeclared m id}
- -> val:Val
- -> m':{Mem | m' == write' m id val}
- -> {isDeclared m' id && isDefined m' id && len m' > 0}
-@-}
-lem_write :: Mem -> Id -> Val -> Mem -> Proof
-lem_write m id val m' = case m of
-  []
-    -> impossible ? lem_isDeclaredImpNonEmpty m id
-       *** QED
-
-  (x,y):xs
-    | x == id
-      -> isDefined ((x,Just val):xs) id
-         === isDefined (write' m id val) id
-         === isDefined m' id ? lem_isDefinedImpIsDeclared m' id
-         *** QED
-
-    | otherwise
-      -> isDeclared m id
-         === isDeclared ((x,y):xs) id
-         === isDeclared xs id
-             ? lem_isDeclaredImpNonEmpty xs id
-             ? lem_write xs id val (write' xs id val)
-         === isDefined (write' xs id val) id
-         === isDefined ((x,y):(write' xs id val)) id
-         === isDefined (write' ((x,y):xs) id val) id
-         === isDefined m' id ? lem_isDefinedImpIsDeclared m' id
-         *** QED
+read :: Mem -> Id -> Val
+read m id = case m of
+  []                         -> liquidError "impossible"
+  (x,Nothing):xs | x == id   -> liquidError "impossible"
+                 | otherwise -> read xs id
+  (x,Just y):xs  | x == id   -> y
+                 | otherwise -> read xs id
 
 -- TESTS -------------------------------------------------------------------
 
--- write_pass1 = write (declare [] "x") "x" 5
+{-@ mem_pass1 :: m:{Mem | DeclP m "x" && DefnP m "y"} @-}
+mem_pass1 :: Mem
+mem_pass1 = [("x",Just 1),("y",Just 2)]
+
+{-@ decl_pass1 :: m:{Mem | DeclP m "x"} @-}
+decl_pass1 = decl [] "x"
+
+{-@ decl_pass2 :: m:{Mem | DeclP m "x" && DeclP m "y"} @-}
+decl_pass2 = decl decl_pass1 "y"
+
+write_pass1 = write (decl [] "x") "x" 5
+
+{-@ write_pass2 :: m:{Mem | DeclP m "y"} @-}
+write_pass2 :: Mem
+write_pass2 = write (decl write_pass1 "y") "y" 4
+
+{-@ write_pass3 :: m:{Mem | DeclP m "y"} @-}
+write_pass3 = write (decl write_pass2 "x") "x" 3
+
+{-@ write_pass4 :: m:{Mem | DefnP m "y"} @-}
+write_pass4 = write write_pass3 "y" 2
+
 -- write_fail1 = write [] "x" 5
--- write_fail2 = write (declare [] "y") "x" 5
+-- write_fail2 = write (decl [] "y") "x" 5
+-- write_fail3 = write write_pass3 "z" 2
+
+read_pass1 = read mem_pass1 "y"
+read_pass2 = read (write (decl [] "x") "x" 5) "x"
+read_pass3 = read (write_pass4) "y"
+read_pass4 = read (write (decl (decl (decl [] "x") "y") "z") "x" 5) "x"
+
+-- read_fail1 = read [] "x"
+-- read_fail2 = read (write (decl [] "x") "x" 5) "y"
