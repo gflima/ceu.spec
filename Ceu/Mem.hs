@@ -1,6 +1,6 @@
 {-@ LIQUID "--reflection" @-}
 
-module Ceu.Mem () where
+module Ceu.Mem where
 
 import Ceu.LH as LH
 import Prelude hiding (read)
