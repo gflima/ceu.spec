@@ -27,7 +27,7 @@ min x y = if x <= y then x else y
 max :: Int -> Int -> Int
 max x y = if x <= y then y else x
 
-{-@ inline isJust @-}
+{-@ measure isJust @-}
 isJust :: Maybe a -> Bool
 isJust Nothing  = False
 isJust (Just _) = True

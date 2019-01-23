@@ -3,8 +3,8 @@
 module Ceu.Expr where
 
 import Ceu.LH as LH
-import qualified Data.Set as S
 import Prelude hiding (read)
+import qualified Data.Set as S
 
 -- Variable name.
 type Id = String
@@ -96,6 +96,35 @@ eval e m = case e of
   Const n   -> n
   Read id   -> read m id
   Add e1 e2 -> (eval e1 m) + (eval e2 m)
+
+-- UNSAFE ------------------------------------------------------------------
+
+{-@ reflect decl' @-}
+decl' :: Mem -> Id -> Mem
+decl' m id = (id,Nothing):m
+
+{-@ reflect write' @-}
+write' :: Mem -> Id -> Val -> Mem
+write' m id val = case m of
+  []                   -> m     -- error
+  (x,y):xs | x == id   -> (x,Just val):xs
+           | otherwise -> (x,y):(write' xs id val)
+
+{-@ reflect read' @-}
+read' :: Mem -> Id -> Val
+read' m id = case m of
+  []                         -> 0 -- error
+  (x,Nothing):xs | x == id   -> 0 -- error
+                 | otherwise -> read' xs id
+  (x,Just y):xs  | x == id   -> y
+                 | otherwise -> read' xs id
+
+{-@ reflect eval' @-}
+eval' :: Expr -> Mem -> Val
+eval' e m = case e of
+  Const n   -> n
+  Read id   -> read' m id
+  Add e1 e2 -> (eval' e1 m) + (eval' e2 m)
 
 -- TESTS -------------------------------------------------------------------
 

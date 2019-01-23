@@ -2,7 +2,7 @@
 
 module Ceu.Stmt where
 
-import Ceu.Expr as Expr
+import Ceu.Expr (Expr,Id)
 import Ceu.LH as LH
 import Debug.Trace
 
@@ -13,6 +13,7 @@ import Debug.Trace
 {-@
 data Stmt [rank]
   = Nop
+  | Write {write1 :: Id, write2 :: Expr}
   | Break
   | Await
   | Fin {fin1 :: {p:Stmt | isWellFormedFinBody p}}
@@ -23,6 +24,7 @@ data Stmt [rank]
 @-}
 data Stmt
   = Nop
+  | Write Id Expr
   | Break
   | Await
   | Fin Stmt
@@ -38,6 +40,7 @@ data Stmt
 {-@ measure isWellFormedFinBody @-}
 isWellFormedFinBody x = case x of
   Nop       -> True
+  Write _ _ -> True
   Break     -> False
   Await     -> False
   Fin _     -> False
@@ -58,6 +61,7 @@ isWellFormedLoopBody x = not (mayExhaust x)
 {-@ measure mayExhaust @-}
 mayExhaust x = case x of
   Nop       -> True
+  Write _ _ -> True
   Break     -> False
   Await     -> False
   Fin _     -> False
@@ -71,6 +75,7 @@ mayExhaust x = case x of
 {-@ measure isBlocked @-}
 isBlocked x = case x of
   Nop       -> False
+  Write _ _ -> False
   Break     -> False
   Await     -> True
   Fin _     -> True
@@ -84,15 +89,15 @@ isBlocked x = case x of
 {-@ inline isIrreducible @-}
 isIrreducible x = x == Nop || x == Break || isBlocked x
 
-{-@ predicate StmtIsIrreducible P = isIrreducible P @-}
-{-@ type StmtIrreducible = {p:Stmt | StmtIsIrreducible p} @-}
-{-@ type StmtNotIrreducible = {p:Stmt | not (StmtIsIrreducible p)} @-}
+{-@ type StmtIrreducible = {p:Stmt | isIrreducible p} @-}
+{-@ type StmtNotIrreducible = {p:Stmt | not (isIrreducible p)} @-}
 
 -- Extracts the bodies of all active 'Fin' statements in 'x'.
 {-@ reflect clear @-}
 {-@ clear :: x:Stmt -> y:{Stmt | rank x >= rank y} @-}
 clear x = case x of
   Nop       -> Nop
+  Write _ _ -> Nop
   Break     -> Nop
   Await     -> Nop
   Fin p     -> p
@@ -107,6 +112,7 @@ clear x = case x of
 rank :: Stmt -> Int
 rank x = case x of
   Nop       -> 1
+  Write _ _ -> 2
   Break     -> 1
   Await     -> 1
   Fin p     -> 1 + (rank p)
@@ -117,35 +123,38 @@ rank x = case x of
 
 {-@ reflect step1 @-}
 {-@ step1
- :: p:StmtNotIrreducible
- -> q:{Stmt | mayExhaust q => mayExhaust p}
+ :: x:StmtNotIrreducible
+ -> y:{Stmt | mayExhaust y => mayExhaust x}
 @-}
 step1 :: Stmt -> Stmt
 step1 x = case x of
- If b p q
-   | b                -> p
-   | otherwise        -> q
+  Write _ _            -> Nop
 
- Seq p q
-  | p == Nop          -> q
-  | p == Break        -> Break
-  | otherwise         -> Seq (step1 p) q
+  If b p q
+    | b                -> p
+    | otherwise        -> q
 
- Loop p q
-  | p == Nop          -> Loop q q
-  | p == Break        -> Nop
-  | otherwise         -> Loop (step1 p) q
+  Seq p q
+    | p == Nop          -> q
+    | p == Break        -> Break
+    | otherwise         -> Seq (step1 p) q
 
- ParOr p q
-  | p == Nop          -> Seq (clear q) Nop
-  | p == Break        -> Seq (clear q) Break
-  | not (isBlocked p) -> ParOr (step1 p) q
-  | q == Nop          -> Seq (clear p) Nop
-  | q == Break        -> Seq (clear p) Break
-  | not (isBlocked q) -> ParOr p (step1 q)
-  | otherwise         -> x      -- impossible
- x                    -> x      -- impossible
+  Loop p q
+    | p == Nop          -> Loop q q
+    | p == Break        -> Nop
+    | otherwise         -> Loop (step1 p) q
 
+  ParOr p q
+    | p == Nop          -> Seq (clear q) Nop
+    | p == Break        -> Seq (clear q) Break
+    | not (isBlocked p) -> ParOr (step1 p) q
+    | q == Nop          -> Seq (clear p) Nop
+    | q == Break        -> Seq (clear p) Break
+    | not (isBlocked q) -> ParOr p (step1 q)
+    | otherwise         -> x      -- impossible
+  x                     -> x      -- impossible
+
+-- Safe version of step.
 {-@ step
  :: x:StmtNotIrreducible
  -> y:{Stmt | rank x > rank y}
@@ -174,8 +183,20 @@ run x
 @-}
 lem_step1DecreasesRank :: Stmt -> Stmt -> Proof
 lem_step1DecreasesRank x y = case x of
-  Nop   -> impossible *** QED
-  Break -> impossible *** QED
+  Nop
+      -> impossible
+         *** QED
+
+  Break
+      -> impossible
+         *** QED
+
+  Write id e
+      -> rank y
+         === rank (step1 x)
+         === rank Nop
+         =<= rank x
+         *** QED
 
   If b p q
     | (step1 x) == p
