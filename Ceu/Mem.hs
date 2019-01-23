@@ -61,7 +61,7 @@ write' m id val = case m of
  :: m:Mem
  -> id:{Id | isDeclared m id}
  -> Val
- -> m':{Mem | isDeclared m' id}
+ -> m':{Mem | isDeclared m' id && isDefined m' id}
 @-}
 write :: Mem -> Id -> Val -> Mem
 write m id val = m' ? lem_write m id val m'
@@ -97,6 +97,53 @@ lem_isDeclared m id = case m of
          === isDeclared xs id
          *** QED
 
+{-@ lem_isDeclaredImpNonEmpty
+ :: m:Mem
+ -> id:{Id | isDeclared m id}
+ -> {m /= []}
+@-}
+lem_isDeclaredImpNonEmpty :: Mem -> Id -> Proof
+lem_isDeclaredImpNonEmpty m id
+  = isDeclared m id
+    === m /= []
+    *** QED
+
+{-@ lem_isDefinedImpNonEmpty
+ :: m:Mem
+ -> id:{Id | isDefined m id}
+ -> {m /= []}
+@-}
+lem_isDefinedImpNonEmpty :: Mem -> Id -> Proof
+lem_isDefinedImpNonEmpty m id
+  = isDefined m id
+    === m /= []
+    *** QED
+
+{-@ lem_isDefinedImpIsDeclared
+ :: m:Mem
+ -> id:{Id | isDefined m id}
+ -> {isDeclared m id}
+@-}
+lem_isDefinedImpIsDeclared :: Mem -> Id -> Proof
+lem_isDefinedImpIsDeclared m id = case m of
+  []
+    -> impossible ? lem_isDefinedImpNonEmpty m id
+       *** QED
+
+  (x,y):xs
+    | x == id
+      -> isDefined m id
+         === isDeclared m id
+         *** QED
+
+    | otherwise
+      -> isDefined m id
+         === isDefined xs id ? lem_isDefinedImpIsDeclared xs id
+         === isDeclared xs id
+         === isDeclared ((x,y):xs) id
+         === isDeclared m id
+         *** QED
+
 {-@ lem_declare
  :: m:Mem
  -> id:Id
@@ -105,35 +152,49 @@ lem_isDeclared m id = case m of
 @-}
 lem_declare :: Mem -> Id -> Mem -> Proof
 lem_declare m id m'
-  = let x = (id,Nothing) in
-      isDeclared m' id
-      === isDeclared (declare' m id) id
-      === isDeclared (x:m) id
-      *** QED
+  = isDeclared m' id
+    === isDeclared (declare' m id) id
+    === isDeclared ((id,Nothing):m) id
+    *** QED
 
-{-@ lem_isDeclaredImpNonEmpty
- :: m:Mem
- -> id:{Id | isDeclared m id}
- -> {m /= []}
-@-}
-lem_isDeclaredImpNonEmpty :: Mem -> Id -> Proof
-lem_isDeclaredImpNonEmpty m id = case m of
-  []
-    -> isDeclared m id
-       === m /= []
-       *** QED
+-- {-@ lem_write
+--  :: m:Mem
+--  -> id:{Id | isDeclared m id}
+--  -> val:Val
+--  -> m':{Mem | m' == write' m id val}
+--  -> {isDeclared m' id && len m' > 0}
+-- @-}
+-- lem_write :: Mem -> Id -> Val -> Mem -> Proof
+-- lem_write m id val m' = case m of
+--   []
+--     -> impossible ? lem_isDeclaredImpNonEmpty m id
+--        *** QED
 
-  x:xs
-    -> isDeclared m id
-       === m /= []
-       *** QED
+--   (x,y):xs
+--     | x == id
+--       -> isDeclared ((x,Just val):xs) id
+--          === isDeclared (write' m id val) id
+--          === isDeclared m' id
+--          *** QED
+
+--     | otherwise
+--       -> isDeclared m id
+--          === isDeclared ((x,y):xs) id
+--          === isDeclared xs id
+--              ? lem_isDeclaredImpNonEmpty xs id
+--              ? lem_write xs id val (write' xs id val)
+--          === isDeclared (write' xs id val) id
+--          === isDeclared ((x,y):(write' xs id val)) id
+--          === isDeclared (write' ((x,y):xs) id val) id
+--          === isDeclared m' id
+--          *** QED
 
 {-@ lem_write
  :: m:Mem
  -> id:{Id | isDeclared m id}
  -> val:Val
  -> m':{Mem | m' == write' m id val}
- -> {isDeclared m' id && len m' > 0}
+ -> {isDeclared m' id && isDefined m' id && len m' > 0}
 @-}
 lem_write :: Mem -> Id -> Val -> Mem -> Proof
 lem_write m id val m' = case m of
@@ -143,9 +204,9 @@ lem_write m id val m' = case m of
 
   (x,y):xs
     | x == id
-      -> isDeclared m' id
-         === isDeclared (write' m id val) id
-         === isDeclared ((x,Just val):xs) id
+      -> isDefined ((x,Just val):xs) id
+         === isDefined (write' m id val) id
+         === isDefined m' id ? lem_isDefinedImpIsDeclared m' id
          *** QED
 
     | otherwise
@@ -154,14 +215,14 @@ lem_write m id val m' = case m of
          === isDeclared xs id
              ? lem_isDeclaredImpNonEmpty xs id
              ? lem_write xs id val (write' xs id val)
-         === isDeclared (write' xs id val) id
-         === isDeclared ((x,y):(write' xs id val)) id
-         === isDeclared (write' ((x,y):xs) id val) id
-         === isDeclared m' id
+         === isDefined (write' xs id val) id
+         === isDefined ((x,y):(write' xs id val)) id
+         === isDefined (write' ((x,y):xs) id val) id
+         === isDefined m' id ? lem_isDefinedImpIsDeclared m' id
          *** QED
 
 -- TESTS -------------------------------------------------------------------
 
-write_pass1 = write (declare [] "x") "x" 5
+-- write_pass1 = write (declare [] "x") "x" 5
 -- write_fail1 = write [] "x" 5
 -- write_fail2 = write (declare [] "y") "x" 5
