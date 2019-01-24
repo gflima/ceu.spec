@@ -1,8 +1,10 @@
+{-@ LIQUID "--exact-data-cons" @-}
 {-@ LIQUID "--reflection" @-}
+{-@ LIQUID "--ple" @-}
 
 module Ceu.Expr where
 
-import Ceu.LH as LH
+import Ceu.LH
 import Prelude hiding (read)
 import qualified Data.Set as S
 
@@ -33,9 +35,9 @@ declSet m = case m of
 {-@ measure defnSet @-}
 defnSet :: Mem -> S.Set Id
 defnSet m = case m of
-  []                     -> S.empty
-  (x,y):xs | LH.isJust y -> S.union (S.singleton x) (defnSet xs)
-           | otherwise   -> S.difference (defnSet xs) (S.singleton x)
+  []             -> S.empty
+  (x,Just y):xs  -> S.union (S.singleton x) (defnSet xs)
+  (x,Nothing):xs -> S.difference (defnSet xs) (S.singleton x)
 
 {-@ predicate DeclP M ID = member ID (declSet M) @-}
 {-@ predicate DefnP M ID = member ID (defnSet M) @-}
@@ -100,10 +102,12 @@ eval e m = case e of
 -- UNSAFE ------------------------------------------------------------------
 
 {-@ reflect decl' @-}
-decl' :: Mem -> Id -> Mem
-decl' m id = (id,Nothing):m
+{-@ decl' :: m:Mem -> Id -> Maybe Val -> m':{Mem | len m' == len m + 1} @-}
+decl' :: Mem -> Id -> Maybe Val -> Mem
+decl' m id val = (id,val):m
 
 {-@ reflect write' @-}
+{-@ write' :: m:Mem -> Id -> Val -> m':{Mem | len m == len m'} @-}
 write' :: Mem -> Id -> Val -> Mem
 write' m id val = case m of
   []                   -> m     -- error
@@ -113,13 +117,13 @@ write' m id val = case m of
 {-@ reflect read' @-}
 read' :: Mem -> Id -> Val
 read' m id = case m of
-  []                         -> 0 -- error
-  (x,Nothing):xs | x == id   -> 0 -- error
-                 | otherwise -> read' xs id
-  (x,Just y):xs  | x == id   -> y
-                 | otherwise -> read' xs id
+  []                   -> 0 -- error
+  (x,y):xs | x /= id   -> 0 -- error
+           | isJust' y -> fromJust' y
+           | otherwise -> read' xs id
 
 {-@ reflect eval' @-}
+{-@ eval' :: Expr -> Mem -> Val @-}
 eval' :: Expr -> Mem -> Val
 eval' e m = case e of
   Const n   -> n

@@ -1,8 +1,10 @@
+{-@ LIQUID "--exact-data-cons" @-}
 {-@ LIQUID "--reflection" @-}
+{-@ LIQUID "--ple" @-}
 
 module Ceu.Stmt where
 
-import Ceu.Expr (Expr,Id)
+import Ceu.Expr (Expr, Id, Val)
 import Ceu.LH as LH
 import Debug.Trace
 
@@ -14,6 +16,7 @@ import Debug.Trace
 data Stmt [rank]
   = Nop
   | Write {write1 :: Id, write2 :: Expr}
+  | Var {var1 :: Id, var2 :: Maybe Val, var3 :: Stmt}
   | Break
   | Await
   | Fin {fin1 :: {p:Stmt | isWellFormedFinBody p}}
@@ -25,6 +28,7 @@ data Stmt [rank]
 data Stmt
   = Nop
   | Write Id Expr
+  | Var Id (Maybe Val) Stmt
   | Break
   | Await
   | Fin Stmt
@@ -41,6 +45,7 @@ data Stmt
 isWellFormedFinBody x = case x of
   Nop       -> True
   Write _ _ -> True
+  Var _ _ p -> isWellFormedFinBody p
   Break     -> False
   Await     -> False
   Fin _     -> False
@@ -62,6 +67,7 @@ isWellFormedLoopBody x = not (mayExhaust x)
 mayExhaust x = case x of
   Nop       -> True
   Write _ _ -> True
+  Var _ _ p -> mayExhaust p
   Break     -> False
   Await     -> False
   Fin _     -> False
@@ -76,6 +82,7 @@ mayExhaust x = case x of
 isBlocked x = case x of
   Nop       -> False
   Write _ _ -> False
+  Var _ _ p -> isBlocked p
   Break     -> False
   Await     -> True
   Fin _     -> True
@@ -98,6 +105,7 @@ isIrreducible x = x == Nop || x == Break || isBlocked x
 clear x = case x of
   Nop       -> Nop
   Write _ _ -> Nop
+  Var _ _ p -> clear p
   Break     -> Nop
   Await     -> Nop
   Fin p     -> p
@@ -113,208 +121,209 @@ rank :: Stmt -> Int
 rank x = case x of
   Nop       -> 1
   Write _ _ -> 2
+  Var _ _ p -> 1 + rank p
   Break     -> 1
   Await     -> 1
-  Fin p     -> 1 + (rank p)
-  If _ p q  -> 1 + LH.max (rank p) (rank q)
+  Fin p     -> 1 + rank p
+  If _ p q  -> 1 + max' (rank p) (rank q)
   Seq p q   -> 1 + rank p + if p == Break then 0 else rank q
   Loop p q  -> 1 + rank p + if not (mayExhaust p) then 0 else rank q
   ParOr p q -> 2 + rank p + rank q
 
-{-@ reflect step1 @-}
-{-@ step1
- :: x:StmtNotIrreducible
- -> y:{Stmt | mayExhaust y => mayExhaust x}
-@-}
-step1 :: Stmt -> Stmt
-step1 x = case x of
-  Write _ _            -> Nop
+-- {-@ reflect step1 @-}
+-- {-@ step1
+--  :: x:StmtNotIrreducible
+--  -> y:{Stmt | mayExhaust y => mayExhaust x}
+-- @-}
+-- step1 :: Stmt -> Stmt
+-- step1 x = case x of
+--   Write _ _            -> Nop
 
-  If b p q
-    | b                -> p
-    | otherwise        -> q
+--   If b p q
+--     | b                -> p
+--     | otherwise        -> q
 
-  Seq p q
-    | p == Nop          -> q
-    | p == Break        -> Break
-    | otherwise         -> Seq (step1 p) q
+--   Seq p q
+--     | p == Nop          -> q
+--     | p == Break        -> Break
+--     | otherwise         -> Seq (step1 p) q
 
-  Loop p q
-    | p == Nop          -> Loop q q
-    | p == Break        -> Nop
-    | otherwise         -> Loop (step1 p) q
+--   Loop p q
+--     | p == Nop          -> Loop q q
+--     | p == Break        -> Nop
+--     | otherwise         -> Loop (step1 p) q
 
-  ParOr p q
-    | p == Nop          -> Seq (clear q) Nop
-    | p == Break        -> Seq (clear q) Break
-    | not (isBlocked p) -> ParOr (step1 p) q
-    | q == Nop          -> Seq (clear p) Nop
-    | q == Break        -> Seq (clear p) Break
-    | not (isBlocked q) -> ParOr p (step1 q)
-    | otherwise         -> x      -- impossible
-  x                     -> x      -- impossible
+--   ParOr p q
+--     | p == Nop          -> Seq (clear q) Nop
+--     | p == Break        -> Seq (clear q) Break
+--     | not (isBlocked p) -> ParOr (step1 p) q
+--     | q == Nop          -> Seq (clear p) Nop
+--     | q == Break        -> Seq (clear p) Break
+--     | not (isBlocked q) -> ParOr p (step1 q)
+--     | otherwise         -> x      -- impossible
+--   x                     -> x      -- impossible
 
--- Safe version of step.
-{-@ step
- :: x:StmtNotIrreducible
- -> y:{Stmt | rank x > rank y}
-@-}
-step x = let y = step1 x in y ? lem_step1DecreasesRank x y
+-- -- Safe version of step.
+-- {-@ step
+--  :: x:StmtNotIrreducible
+--  -> y:{Stmt | rank x > rank y}
+-- @-}
+-- step x = let y = step1 x in y ? lem_step1DecreasesRank x y
 
-{-@ run
- :: StmtNotIrreducible
- -> StmtIrreducible
-@-}
-run :: Stmt -> Stmt
-run x
-  | isIrreducible x = liquidError "impossible"
-  | otherwise = let x' = step x
-                    s  = show x  ++ " <" ++ show (rank x)  ++ ">"
-                    s' = show x' ++ " <" ++ show (rank x') ++ ">"
-    in trace (s ++ " -> " ++ s') $ if isIrreducible x' then x' else run x'
+-- {-@ run
+--  :: StmtNotIrreducible
+--  -> StmtIrreducible
+-- @-}
+-- run :: Stmt -> Stmt
+-- run x
+--   | isIrreducible x = liquidError "impossible"
+--   | otherwise = let x' = step x
+--                     s  = show x  ++ " <" ++ show (rank x)  ++ ">"
+--                     s' = show x' ++ " <" ++ show (rank x') ++ ">"
+--     in trace (s ++ " -> " ++ s') $ if isIrreducible x' then x' else run x'
 
 -- LEMMAS ------------------------------------------------------------------
 
 -- Lemma: If x == (step1 y) then stmtRank x > stmtRank y.
 -- Proof: By induction on the structure of x.
-{-@ lem_step1DecreasesRank
- :: x:StmtNotIrreducible
- -> y:{Stmt | y == step1 x}
- -> {rank x > rank y}
-@-}
-lem_step1DecreasesRank :: Stmt -> Stmt -> Proof
-lem_step1DecreasesRank x y = case x of
-  Nop
-      -> impossible
-         *** QED
+-- {-@ lem_step1DecreasesRank
+--  :: x:StmtNotIrreducible
+--  -> y:{Stmt | y == step1 x}
+--  -> {rank x > rank y}
+-- @-}
+-- lem_step1DecreasesRank :: Stmt -> Stmt -> Proof
+-- lem_step1DecreasesRank x y = case x of
+--   Nop
+--       -> impossible
+--          *** QED
 
-  Break
-      -> impossible
-         *** QED
+--   Break
+--       -> impossible
+--          *** QED
 
-  Write id e
-      -> rank y
-         === rank (step1 x)
-         === rank Nop
-         =<= rank x
-         *** QED
+--   Write id e
+--       -> rank y
+--          === rank (step1 x)
+--          === rank Nop
+--          =<= rank x
+--          *** QED
 
-  If b p q
-    | (step1 x) == p
-      -> rank y
-         === rank (step1 x)
-         === rank p
-         =<= rank x
-         *** QED
+--   If b p q
+--     | (step1 x) == p
+--       -> rank y
+--          === rank (step1 x)
+--          === rank p
+--          =<= rank x
+--          *** QED
 
-    | otherwise
-      -> rank y
-         === rank (step1 x)
-         === rank q
-         =<= rank x
-         *** QED
+--     | otherwise
+--       -> rank y
+--          === rank (step1 x)
+--          === rank q
+--          =<= rank x
+--          *** QED
 
-  Seq p q
-    | p == Nop
-      -> rank y
-         === rank (step1 x)
-         =<= rank x
-         *** QED
+--   Seq p q
+--     | p == Nop
+--       -> rank y
+--          === rank (step1 x)
+--          =<= rank x
+--          *** QED
 
-    | p == Break
-      -> rank y
-         === rank (step1 x)
-         =<= rank x
-         *** QED
+--     | p == Break
+--       -> rank y
+--          === rank (step1 x)
+--          =<= rank x
+--          *** QED
 
-    | otherwise
-      -> rank y
-         === rank (step1 x)
-         === rank (Seq (step1 p) q)
-         =<= 1 + rank (step1 p) + rank q
-             ? lem_step1DecreasesRank p (step1 p)
-         =<= rank x
-         *** QED
+--     | otherwise
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (Seq (step1 p) q)
+--          =<= 1 + rank (step1 p) + rank q
+--              ? lem_step1DecreasesRank p (step1 p)
+--          =<= rank x
+--          *** QED
 
-  Loop p q
-    | p == Nop
-      -> rank y
-         === rank (step1 x)
-         === rank (Loop q q)
-         =<= rank x
-         *** QED
+--   Loop p q
+--     | p == Nop
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (Loop q q)
+--          =<= rank x
+--          *** QED
 
-    | p == Break
-      -> rank y
-         === rank (step1 x)
-         === rank Nop
-         =<= rank x
-         *** QED
+--     | p == Break
+--       -> rank y
+--          === rank (step1 x)
+--          === rank Nop
+--          =<= rank x
+--          *** QED
 
-    | not (mayExhaust p)
-      -> rank y
-         === rank (step1 x)
-         === rank (Loop (step1 p) q)
-         === 1 + rank (step1 p) ? lem_step1DecreasesRank p (step1 p)
-         =<= rank x
-         *** QED
+--     | not (mayExhaust p)
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (Loop (step1 p) q)
+--          === 1 + rank (step1 p) ? lem_step1DecreasesRank p (step1 p)
+--          =<= rank x
+--          *** QED
 
-    | otherwise
-      -> rank y
-         === rank (step1 x)
-         === rank (Loop (step1 p) q)
-         =<= 1 + rank (step1 p) + rank q ? lem_step1DecreasesRank p (step1 p)
-         =<= rank x
-         *** QED
+--     | otherwise
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (Loop (step1 p) q)
+--          =<= 1 + rank (step1 p) + rank q ? lem_step1DecreasesRank p (step1 p)
+--          =<= rank x
+--          *** QED
 
-  ParOr p q
-    | p == Nop
-      -> rank y
-         === rank (step1 x)
-         === rank (Seq (clear q) Nop)
-         =<= rank x
-         *** QED
+--   ParOr p q
+--     | p == Nop
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (Seq (clear q) Nop)
+--          =<= rank x
+--          *** QED
 
-    | p == Break
-      -> rank y
-         === rank (step1 x)
-         === rank (Seq (clear q) Break)
-         =<= rank x
-         *** QED
+--     | p == Break
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (Seq (clear q) Break)
+--          =<= rank x
+--          *** QED
 
-    | not (isBlocked p)
-      -> rank y
-         === rank (step1 x)
-         === rank (ParOr (step1 p) q) ? lem_step1DecreasesRank p (step1 p)
-         =<= rank x
-         *** QED
+--     | not (isBlocked p)
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (ParOr (step1 p) q) ? lem_step1DecreasesRank p (step1 p)
+--          =<= rank x
+--          *** QED
 
-    | q == Nop
-      -> rank y
-         === rank (step1 x)
-         === rank (Seq (clear p) Nop)
-         =<= rank x
-         *** QED
+--     | q == Nop
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (Seq (clear p) Nop)
+--          =<= rank x
+--          *** QED
 
-    | q == Break
-      -> rank y
-         === rank (step1 x)
-         === rank (Seq (clear p) Break)
-         =<= rank x
-         *** QED
+--     | q == Break
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (Seq (clear p) Break)
+--          =<= rank x
+--          *** QED
 
-    | not (isBlocked q)
-      -> rank y
-         === rank (step1 x)
-         === rank (ParOr p (step1 q)) ? lem_step1DecreasesRank q (step1 q)
-         =<= rank x
-         *** QED
+--     | not (isBlocked q)
+--       -> rank y
+--          === rank (step1 x)
+--          === rank (ParOr p (step1 q)) ? lem_step1DecreasesRank q (step1 q)
+--          =<= rank x
+--          *** QED
 
-    | otherwise
-      -> impossible
-         *** QED
+--     | otherwise
+--       -> impossible
+--          *** QED
 
-  _ -> impossible *** QED
+--   _ -> impossible *** QED
 
 -- TESTS -------------------------------------------------------------------
 
