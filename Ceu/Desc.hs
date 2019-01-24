@@ -29,7 +29,8 @@ nstRank :: Desc -> Int
 nstRank (x,m) = rank x
 
 -- Nested transition.
--- FIXME: The Var rule with reflection on is crashing LH.
+-- FIXME: The Var rule with reflection on is crashing LH
+-- (revision 57213512a9d69093c12d644b21dbf9da95811894).
 {-@ reflect nst1 @-}
 {-@ nst1
  :: d:DescNotNstIrreducible
