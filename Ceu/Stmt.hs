@@ -179,7 +179,8 @@ run x
 -- Proof: By induction on the structure of x.
 {-@ lem_step1DecreasesRank
  :: x:StmtNotIrreducible
- -> y:{Stmt | y == step1 x} -> {rank x > rank y}
+ -> y:{Stmt | y == step1 x}
+ -> {rank x > rank y}
 @-}
 lem_step1DecreasesRank :: Stmt -> Stmt -> Proof
 lem_step1DecreasesRank x y = case x of
