@@ -2,9 +2,17 @@
 
 module Ceu.Stmt where
 
-import Ceu.Expr (Expr,Id)
-import Ceu.LH as LH
+import Language.Haskell.Liquid.Prelude
+import Language.Haskell.Liquid.ProofCombinators
 import Debug.Trace
+
+{-@ inline min' @-}
+min' :: Int -> Int -> Int
+min' x y = if x <= y then x else y
+
+{-@ inline max' @-}
+max' :: Int -> Int -> Int
+max' x y = if x <= y then y else x
 
 -- Statement.
 -- * Function 'rank' is the default termination measure.
@@ -13,7 +21,7 @@ import Debug.Trace
 {-@
 data Stmt [rank]
   = Nop
-  | Write {write1 :: Id, write2 :: Expr}
+  | Write {write1 :: String, write2 :: Int}
   | Break
   | Await
   | Fin {fin1 :: {p:Stmt | isWellFormedFinBody p}}
@@ -24,7 +32,7 @@ data Stmt [rank]
 @-}
 data Stmt
   = Nop
-  | Write Id Expr
+  | Write String Int
   | Break
   | Await
   | Fin Stmt
@@ -116,7 +124,7 @@ rank x = case x of
   Break     -> 1
   Await     -> 1
   Fin p     -> 1 + (rank p)
-  If _ p q  -> 1 + LH.max (rank p) (rank q)
+  If _ p q  -> 1 + max' (rank p) (rank q)
   Seq p q   -> 1 + rank p + if p == Break then 0 else rank q
   Loop p q  -> 1 + rank p + if not (mayExhaust p) then 0 else rank q
   ParOr p q -> 2 + rank p + rank q
